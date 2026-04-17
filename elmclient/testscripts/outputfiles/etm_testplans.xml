@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<artifacts project="Test Project (QM)" type="Test Plans" count="1">
+  <artifact uri="https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestPlan/_bwRbIC9YEfGPK7oap5GLRg">
+    <property name="acc:accessContext">https://jazz602.local:8443/qm/acclist#_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="acp:accessControl">https://jazz602.local:8443/qm/oslc_qm/accessControl/_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="dcterms:contributor">https://jazz602.local:8443/jts/users/unassigned</property>
+    <property name="dcterms:created">2026-04-03T12:27:09.085Z</property>
+    <property name="dcterms:creator">https://jazz602.local:8443/jts/users/jazzadmin</property>
+    <property name="dcterms:description"></property>
+    <property name="dcterms:identifier">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestPlan/_bwRbIC9YEfGPK7oap5GLRg</property>
+    <property name="dcterms:modified">2026-04-14T10:13:52.236Z</property>
+    <property name="dcterms:relation">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/resources/_R_67YC9YEfGPK7oap5GLRg/testplan/urn:com.ibm.rqm:testplan:1</property>
+    <property name="dcterms:title">Test Plan 1</property>
+    <property name="http://jazz.net/xmlns/prod/jazz/rqm/process/1.0/hasPriority">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/process-info/_R_67YC9YEfGPK7oap5GLRg/priority/literal.priority.101</property>
+    <property name="http://jazz.net/xmlns/prod/jazz/rqm/process/1.0/hasWorkflowState">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/process-info/_R_67YC9YEfGPK7oap5GLRg/workflowstate/com.ibm.rqm.process.testplan.workflow/com.ibm.rqm.planning.common.new</property>
+    <property name="oslc:instanceShape">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/shape/resource/com.ibm.rqm.planning.VersionedTestPlan</property>
+    <property name="oslc:serviceProvider">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/services.xml</property>
+    <property name="oslc:shortId">1</property>
+    <property name="oslc_qm:relatedChangeRequest">https://jazz602.local:8443/ccm/resource/itemName/com.ibm.team.workitem.WorkItem/10</property>
+    <property name="oslc_qm:usesTestCase">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestCase/_eGFb8C9YEfGPK7oap5GLRg | https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestCase/_ibk1gC9YEfGPK7oap5GLRg | https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestCase/_ib4-kC9YEfGPK7oap5GLRg | https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestCase/_hNfRwC9YEfGPK7oap5GLRg</property>
+    <property name="process:projectArea">https://jazz602.local:8443/qm/process/project-areas/_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="rdf:type">TestPlan</property>
+    <property name="rqm_qm:isLocked">false</property>
+    <property name="rqm_qm:orderIndex">0</property>
+    <property name="rqm_qm:richTextSection">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedTestPlan/_bwRbIC9YEfGPK7oap5GLRg#com.ibm.rqm.planning.editor.section.planTestObjectives</property>
+    <property name="rqm_qm:template">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/resources/Test+Project/template/testplan/com.ibm.rqm.planning.templates.testplan.default</property>
+  </artifact>
+</artifacts>

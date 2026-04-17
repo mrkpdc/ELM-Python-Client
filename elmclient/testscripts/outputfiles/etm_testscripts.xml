@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<artifacts project="Test Project (QM)" type="Test Scripts" count="1">
+  <artifact uri="https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedExecutionScript/_b5t1kS9ZEfGPK7oap5GLRg">
+    <property name="acc:accessContext">https://jazz602.local:8443/qm/acclist#_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="acp:accessControl">https://jazz602.local:8443/qm/oslc_qm/accessControl/_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="dcterms:contributor">https://jazz602.local:8443/jts/users/unassigned</property>
+    <property name="dcterms:created">2026-04-03T12:34:19.625Z</property>
+    <property name="dcterms:creator">https://jazz602.local:8443/jts/users/jazzadmin</property>
+    <property name="dcterms:description"></property>
+    <property name="dcterms:identifier">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.VersionedExecutionScript/_b5t1kS9ZEfGPK7oap5GLRg</property>
+    <property name="dcterms:modified">2026-04-03T12:35:26.05Z</property>
+    <property name="dcterms:relation">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/resources/_R_67YC9YEfGPK7oap5GLRg/executionscript/urn:com.ibm.rqm:executionscript:1</property>
+    <property name="dcterms:title">Test Script 1</property>
+    <property name="http://jazz.net/xmlns/prod/jazz/rqm/process/1.0/hasWorkflowState">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/process-info/_R_67YC9YEfGPK7oap5GLRg/workflowstate/com.ibm.rqm.process.testscript.workflow/com.ibm.rqm.planning.common.new</property>
+    <property name="oslc:instanceShape">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/shape/resource/com.ibm.rqm.planning.VersionedExecutionScript</property>
+    <property name="oslc:serviceProvider">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/services.xml</property>
+    <property name="oslc:shortId">1</property>
+    <property name="oslc_qm:executionInstructions">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/resources/Test+Project/testscript/urn:com.ibm.rqm:testscript:1</property>
+    <property name="process:projectArea">https://jazz602.local:8443/qm/process/project-areas/_R_67YC9YEfGPK7oap5GLRg</property>
+    <property name="rdf:type">TestScript</property>
+    <property name="rqm_qm:containsTestScriptStep">https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.ExecutionElement2/_lzGVgC9ZEfGPK7oap5GLRg | https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.ExecutionElement2/_gl0_YC9ZEfGPK7oap5GLRg | https://jazz602.local:8443/qm/oslc_qm/contexts/_R_67YC9YEfGPK7oap5GLRg/resources/com.ibm.rqm.planning.ExecutionElement2/_lzG8kC9ZEfGPK7oap5GLRg</property>
+    <property name="rqm_qm:isIncludeBuiltInVariables">false</property>
+    <property name="rqm_qm:isLocked">false</property>
+    <property name="rqm_qm:orderIndex">0</property>
+    <property name="rqm_qm:scriptType">com.ibm.rqm.planning.common.scripttype.manual</property>
+    <property name="rqm_qm:template">https://jazz602.local:8443/qm/service/com.ibm.rqm.integration.service.IIntegrationService/resources/Test+Project/template/testscript/com.ibm.rqm.planning.manualtestscript.default</property>
+  </artifact>
+</artifacts>
