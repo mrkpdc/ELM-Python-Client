@@ -358,6 +358,10 @@ class Type_System_Mixin():
         self.enums[enum_uri] = {'name': enum_name, 'id':id, 'property': property_uri}
         if id:
             self.enums[id] = {'name': enum_name, 'id':id, 'property': property_uri}
+        if property_uri not in self.properties:
+            # property was not registered (e.g. external/standard namespace skipped during shape loading) - skip silently
+            logger.info( f"register_enum: property_uri {property_uri} not in properties - skipping enum registration for {enum_name}" )
+            return
         if enum_uri not in self.properties[property_uri]['enums']:
             self.properties[property_uri]['enums'].append(enum_uri)
 
