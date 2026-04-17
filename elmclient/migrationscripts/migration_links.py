@@ -38,7 +38,7 @@ import elmclient.utils as utils
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-loglevel = "INFO,INFO"
+loglevel = "INFO,OFF"
 levels = [utils.loglevels.get(l, -1) for l in loglevel.split(",", 1)]
 if len(levels) < 2:
     levels.append(None)
