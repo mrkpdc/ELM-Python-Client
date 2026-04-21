@@ -232,6 +232,13 @@ def upload_ewm_attachment(session, jazzhost: str, wi_uri: str, filepath: str,
     )
 
     try:
+        # Warm up the session on the CCM service endpoint before uploading
+        session.get(
+            upload_url.split("?")[0],
+            headers={"Accept": "text/html"},
+            verify=False,
+        )
+
         with open(filepath, "rb") as f:
             response = session.post(
                 upload_url,
@@ -336,6 +343,13 @@ def upload_etm_attachment(session, jazzhost: str, project_area_id: str,
     ct = content_type or "application/octet-stream"
 
     try:
+        # Warm up the session on the QM service endpoint before uploading
+        session.get(
+            upload_url.split("?")[0],
+            headers={"Accept": "text/html"},
+            verify=False,
+        )
+
         with open(filepath, "rb") as f:
             response = session.post(
                 upload_url,
@@ -511,15 +525,14 @@ ewm_server = elmserver.JazzTeamServer(
     appstring="ccm",
     cachingcontrol=2,
 )
+ewm_session = getattr(ewm_server, '_session', None) \
+           or getattr(ewm_server, 'session',  None)
+
 ccmapp = ewm_server.find_app(f"ccm:{ccmcontext}", ok_to_create=True)
 ewm_p  = ccmapp.find_project(ewm_projectname)
 if ewm_p is None:
     raise Exception(f"EWM project '{ewm_projectname}' not found on target.")
 print(f"EWM project: {ewm_p.name}")
-
-# Extract session AFTER find_project to ensure authentication is complete
-ewm_session = getattr(ewm_server, '_session', None) \
-           or getattr(ewm_server, 'session',  None)
 
 ewm_services_xml = ewm_p.get_services_xml()
 
@@ -531,15 +544,14 @@ etm_server = elmserver.JazzTeamServer(
     appstring="qm",
     cachingcontrol=2,
 )
+etm_session = getattr(etm_server, '_session', None) \
+           or getattr(etm_server, 'session',  None)
+
 qmapp = etm_server.find_app(f"qm:{qmcontext}", ok_to_create=True)
 etm_p = qmapp.find_project(etm_projectname)
 if etm_p is None:
     raise Exception(f"ETM project '{etm_projectname}' not found on target.")
 print(f"ETM project: {etm_p.name}")
-
-# Extract session AFTER find_project to ensure authentication is complete
-etm_session = getattr(etm_server, '_session', None) \
-           or getattr(etm_server, 'session',  None)
 
 etm_services_xml  = etm_p.get_services_xml()
 # Extract service document URL from rdf:about of the ServiceProvider element
