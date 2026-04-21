@@ -437,6 +437,63 @@ for src_tr_uri, props in etm_testresults.items():
         print("    (no new links to add)")
 
 # ===========================================================================
+# STEP 5 -- Add internal EWM links (work item -> work item)
+# ===========================================================================
+print("\n=== Updating EWM internal WorkItem links ===")
+
+# All EWM internal link fields use the rtc_cm:com.ibm.team.workitem.linktype.* pattern
+# We handle them generically: any field whose value is a work item URI in the mapping table
+# gets remapped. Attachment links are excluded (handled in import).
+EXCLUDED_EWM_LINK_PREFIXES = (
+    "rtc_cm:com.ibm.team.workitem.linktype.attachment.",
+)
+
+for src_wi_uri, props in ewm_workitems.items():
+    target_wi_uri = mapping.get(src_wi_uri)
+    if not target_wi_uri:
+        continue
+
+    # Collect all internal EWM link fields
+    links_to_add = {}
+    for prop_key, val in props.items():
+        # Skip non-link fields and attachment fields
+        if not prop_key.startswith("rtc_cm:com.ibm.team.workitem.linktype."):
+            continue
+        if any(prop_key.startswith(excl) for excl in EXCLUDED_EWM_LINK_PREFIXES):
+            continue
+
+        src_uris = val if isinstance(val, list) else [val]
+        src_uris = [u for u in src_uris if u and mapping.get(u)]
+        if not src_uris:
+            continue
+
+        # Build full property URI from prefixed key
+        # rtc_cm: -> http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/
+        prop_uri = prop_key.replace(
+            "rtc_cm:", "http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/"
+        )
+        links_to_add[prop_uri] = src_uris
+
+    if not links_to_add:
+        continue
+
+    title = props.get("dcterms:title", src_wi_uri)
+    print(f"\n  WorkItem: {title}")
+
+    rdf_bytes = fetch_artifact(ewm_session, target_wi_uri)
+    if not rdf_bytes:
+        continue
+
+    etag    = get_etag(ewm_session, target_wi_uri)
+    updated = add_links_to_rdf(rdf_bytes, links_to_add, mapping)
+
+    if updated:
+        ok = put_artifact(ewm_session, target_wi_uri, updated, etag)
+        print(f"    {'OK' if ok else 'FAILED'}")
+    else:
+        print("    (no new links to add)")
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 print("\n=== Linking complete ===")
