@@ -56,8 +56,8 @@ jtscontext  = "jts"
 ccmcontext  = "ccm"
 qmcontext   = "qm"
 
-ewm_projectname = "Test Project 3 (CM)"
-etm_projectname = "Test Project 3 (QM)"
+ewm_projectname = "Test Project 1 (CM)"
+etm_projectname = "Test Project (QM)"
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -114,6 +114,13 @@ def fetch_artifact(session, uri: str) -> bytes | None:
 
 def put_artifact(session, uri: str, rdf_bytes: bytes, etag: str = None) -> bool:
     """PUT updated RDF/XML back to the server."""
+    # Warm up the session on this URI before PUT to ensure authentication is active
+    session.get(
+        uri,
+        headers={"Accept": "application/rdf+xml", "OSLC-Core-Version": "2.0"},
+        verify=False,
+    )
+
     headers = {
         "Content-Type":      "application/rdf+xml",
         "Accept":            "application/rdf+xml",

@@ -56,8 +56,8 @@ jtscontext  = "jts"
 ccmcontext  = "ccm"
 qmcontext   = "qm"
 
-ewm_projectname = "Test Project 3 (CM)"
-etm_projectname = "Test Project 3 (QM)"
+ewm_projectname = "Test Project 1 (CM)"
+etm_projectname = "Test Project (QM)"
 
 # Output directory
 OUTPUT_DIR = "./migration_data"
