@@ -101,8 +101,6 @@ SKIP_FIELDS = {
     "rtc_cm:subscribers",
     "rtc_cm:state",
     # ETM server-managed
-    "rqm_qm:orderIndex",
-    "rqm_qm:weight",
     "rqm_qm:copiedFrom",
     "rqm_qm:copiedRoot",
     "rqm_qm:currentTestResult",
@@ -471,16 +469,28 @@ def build_rdf_payload(rdf_type_uri: str, props: dict,
         "dcterms:title",
         "dcterms:description",
         "dcterms:subject",
+        # ETM TestResult fields
         "oslc_qm:status",
-        "rqm_qm:verdict",
         "rqm_qm:isCurrent",
         "rqm_qm:isLocked",
         "rqm_qm:numberOfIterations",
+        "rqm_qm:orderIndex",
+        "rqm_qm:weight",
+        "rqm_qm:pointsPassed",
+        "rqm_qm:pointsFailed",
+        "rqm_qm:pointsBlocked",
+        "rqm_qm:pointsAttempted",
+        "rqm_qm:pointsDeferred",
+        "rqm_qm:pointsInconclusive",
+        "rqm_qm:pointsPermFailed",
+        "rqm_qm:startTime",
+        "rqm_qm:endTime",
     }
 
     # URI-valued fields that must be rendered as rdf:resource attributes
     URI_FIELDS = {
         "rqm_qm:scriptType",
+        "rqm_qm:verdict",
     }
 
     for key, val in props.items():
