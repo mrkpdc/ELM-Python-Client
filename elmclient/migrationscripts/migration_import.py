@@ -471,7 +471,7 @@ def build_rdf_payload(rdf_type_uri: str, props: dict,
         "dcterms:title",
         "dcterms:description",
         "dcterms:subject",
-
+        "oslc_qm:status",
         "rqm_qm:verdict",
         "rqm_qm:isCurrent",
         "rqm_qm:isLocked",
