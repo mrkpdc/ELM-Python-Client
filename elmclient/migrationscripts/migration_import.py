@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import urllib.parse
 
 import lxml.etree as ET
 
@@ -53,6 +54,41 @@ qmcontext   = "qm"
 ewm_projectname = "Test Project 1 (CM)"
 etm_projectname = "Test Project (QM)"
 
+# Source instance host -- used by sanitize_raw_rdf to rewrite URIs
+SOURCE_HOST = "https://jazz602.local:8443"
+
+# ---------------------------------------------------------------------------
+# EWM workflow state mapping (source state literal -> target action flag name).
+#
+# EWM state migration mapping.
+#
+# Key   = last path segment of the source rtc_cm:state URI
+#           e.g. "2"  from .../states/2
+#                "com.ibm.team.workitem.taskWorkflow.state.s1"
+#
+# Value = last path segment of the TARGET state URI to set
+#           e.g. "bugzillaWorkflow.state.s2"  (In Progress on 7.x)
+#         OR empty string "" = initial state, skip transition
+#
+# How to find the correct value:
+#   Open a Defect on jazz710 and manually set it to the desired state.
+#   Then GET that work item with Accept: application/rdf+xml and read
+#   the rtc_cm:state rdf:resource URI -- take the last path segment.
+#
+# If source and target have IDENTICAL workflow configuration (same process
+# template AND same customizations), leave this map empty -- the script
+# will replace the host in the source state URI and use it directly.
+# ---------------------------------------------------------------------------
+EWM_STATE_MAP: dict[str, str] = {
+    # Source state '2' = "In Progress" on 6.0.2.
+    # Target "In Progress" in bugzillaWorkflow on 7.1.0 = bugzillaWorkflow.state.s2
+    # (confirmed via discover_ewm_states.py)
+    "2": "bugzillaWorkflow.state.s2",
+    # Initial states -- no transition needed
+    "com.ibm.team.workitem.taskWorkflow.state.s1": "",
+    "bugzillaWorkflow.state.s1": "",
+}
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -62,6 +98,9 @@ EWM_ATT_DIR      = os.path.join(DATA_DIR, "attachments", "ewm")
 ETM_ATT_DIR      = os.path.join(DATA_DIR, "attachments", "etm")
 EWM_ATT_INDEX    = os.path.join(DATA_DIR, "attachments", "ewm_attachment_index.json")
 ETM_ATT_INDEX    = os.path.join(DATA_DIR, "attachments", "etm_attachment_index.json")
+RAW_RDF_DIR      = os.path.join(DATA_DIR, "raw_rdf")
+TS_RAW_INDEX     = os.path.join(RAW_RDF_DIR, "etm_testscripts_raw_index.json")
+TC_RAW_INDEX     = os.path.join(RAW_RDF_DIR, "etm_testcases_raw_index.json")
 
 # ---------------------------------------------------------------------------
 # OSLC namespaces
@@ -71,6 +110,8 @@ NS = {
     "rdf":     "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "dcterms": "http://purl.org/dc/terms/",
 }
+RDF_NS       = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+OSLC_NS      = "http://open-services.net/ns/core#"
 RDF_RESOURCE = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}resource"
 
 # ---------------------------------------------------------------------------
@@ -80,33 +121,85 @@ RDF_RESOURCE = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}resource"
 SKIP_FIELDS = {
     "oslc:instanceShape",
     "oslc:serviceProvider",
+    "oslc:discussedBy",
     "rtc_cm:repository",
     "rtc_cm:progressTracking",
     "rtc_cm:timeSheet",
+    "rtc_cm:state",       # excluded from POST payload; applied via transition_ewm_state after creation
+    "rtc_cm:modifiedBy",
+    "rtc_cm:resolvedBy",
+    "rtc_cm:subscribers",
     "http://open-services.net/ns/pl#schedule",
-    "oslc:discussedBy",
     "acc:accessContext",
-    "acp:accessControl",
+    # acp:accessControl -- actual ns is http://jazz.net/ns/acp# (NOT open-services acc#)
+    # handled via EXTRA_SKIP_TAGS below with Clark notation
     "process:projectArea",
     "rdf:type",
     "dcterms:identifier",
-    "oslc:shortId",
-    "oslc:shortTitle",
     "dcterms:created",
     "dcterms:modified",
     "dcterms:creator",
     "dcterms:contributor",
-    "rtc_cm:modifiedBy",
-    "rtc_cm:resolvedBy",
-    "rtc_cm:subscribers",
-    "rtc_cm:state",
-    # ETM server-managed
+    "dcterms:relation",
+    "oslc:shortId",
+    "oslc:shortTitle",
+    # ETM server-managed / computed
     "rqm_qm:copiedFrom",
     "rqm_qm:copiedRoot",
     "rqm_qm:currentTestResult",
     "rqm_qm:lastFailedTestResult",
     "rqm_qm:producesTestResult",
-    "dcterms:relation",
+    # ETM versioning
+    "oslc_config:versionId",
+    "oslc_config:component",
+    "oslc_config:configurations",
+    "calm:trackedResourceSet",
+    # ETM step container props (flat string value, not valid in constructed payload)
+    "rqm_qm:containsStepElement",
+    "rqm_qm:containsScriptStep",
+    "rqm_qm:steps",
+}
+
+# Additional Clark-notation tags to strip from raw RDF payloads.
+# These use namespace URIs that differ from the prefixes in SKIP_FIELDS
+# and would be missed by the prefix-based lookup.
+EXTRA_SKIP_TAGS = {
+    # acp:accessControl -> http://jazz.net/ns/acp# (not the acc# namespace)
+    "{http://jazz.net/ns/acp#}accessControl",
+    # process:projectArea -> http://jazz.net/ns/process# (not jazz.net/xmlns/prod/jazz/process)
+    "{http://jazz.net/ns/process#}projectArea",
+    # rqm_process:hasWorkflowState and hasPriority carry project-specific URI segments
+    # but the literal state/priority IDs are STABLE across ETM versions.
+    # We keep these fields and let _rewrite() fix the host + project context.
+    # --> NOT in EXTRA_SKIP_TAGS
+    # rqm_qm:category, template, executionInstructions contain source project name
+    "{http://jazz.net/ns/qm/rqm#}category",
+    "{http://jazz.net/ns/qm/rqm#}template",
+    "{http://open-services.net/ns/qm#}executionInstructions",
+    # copiedFrom / copiedRoot
+    "{http://jazz.net/ns/qm/rqm#}copiedFrom",
+    "{http://jazz.net/ns/qm/rqm#}copiedRoot",
+    # acc namespace variant
+    "{http://open-services.net/ns/core/acc#}accessContext",
+    # ---------------------------------------------------------------------------
+    # LINK_FIELDS in Clark notation.
+    # Cross-artifact links must be stripped from raw RDF blobs at creation time:
+    # the server resolves rdf:resource URIs immediately and returns AQXCM5012E
+    # if the referenced artifact doesn't exist yet on the target.
+    # migration_links.py re-adds all these links after all artifacts are created.
+    # ---------------------------------------------------------------------------
+    # ETM -> EWM
+    "{http://open-services.net/ns/qm#}relatedChangeRequest",
+    # ETM internal (re-added by migration_links.py)
+    "{http://open-services.net/ns/qm#}usesTestScript",
+    "{http://open-services.net/ns/qm#}usesTestCase",
+    "{http://jazz.net/ns/qm/rqm#}containsStepResult",
+    # EWM -> ETM cross-app links
+    "{http://open-services.net/ns/cm-x#}relatedTestCase",
+    "{http://open-services.net/ns/cm-x#}relatedTestPlan",
+    "{http://open-services.net/ns/cm-x#}affectsTestResult",
+    # Attachments (handled separately in steps 7-8)
+    "{http://jazz.net/ns/qm/rqm#}attachment",
 }
 
 # Fields that are OSLC links to ETM/EWM artifacts -- remapped via mapping table
@@ -157,23 +250,29 @@ def save_json(path: str, data: dict):
 
 
 def get_factory_uri(services_xml, resource_type_uri: str) -> str | None:
-    """Find the creation factory URI for a given OSLC resource type."""
-    for factory in services_xml.findall(".//oslc:CreationFactory", NS):
+    """
+    Find the creation factory URI for a given OSLC resource type.
+    Uses iter() to traverse the entire document including nested ServiceProviders
+    (ETM 7.x places execution factories in a child ServiceProvider).
+    """
+    root = services_xml.getroot() if hasattr(services_xml, "getroot") else services_xml
+    for factory in root.iter(f"{{{NS['oslc']}}}CreationFactory"):
         rtypes = [
             rt.get(RDF_RESOURCE, "")
-            for rt in factory.findall("oslc:resourceType", NS)
+            for rt in factory.findall(f"{{{NS['oslc']}}}resourceType")
         ]
         if resource_type_uri in rtypes:
-            el = factory.find("oslc:creation", NS)
+            el = factory.find(f"{{{NS['oslc']}}}creation")
             if el is not None:
                 return el.get(RDF_RESOURCE)
     return None
 
 
 def get_ewm_factory_uri_by_type(services_xml, workitem_type: str) -> str | None:
-    """Find the EWM creation factory URI by work item type segment (e.g. 'task', 'defect')."""
-    for factory in services_xml.findall(".//oslc:CreationFactory", NS):
-        el = factory.find("oslc:creation", NS)
+    """Find the EWM creation factory URI by work item type segment."""
+    root = services_xml.getroot() if hasattr(services_xml, "getroot") else services_xml
+    for factory in root.iter(f"{{{NS['oslc']}}}CreationFactory"):
+        el = factory.find(f"{{{NS['oslc']}}}creation")
         if el is None:
             continue
         uri = el.get(RDF_RESOURCE, "")
@@ -182,14 +281,15 @@ def get_ewm_factory_uri_by_type(services_xml, workitem_type: str) -> str | None:
     return None
 
 
-def post_artifact(session, factory_uri: str, payload: str) -> str | None:
+def post_artifact(session, factory_uri: str, payload) -> str | None:
     """
-    POST an RDF/XML payload to a creation factory.
+    POST an RDF/XML payload (str or bytes) to a creation factory.
     Returns the new resource URI (Location header) or None on failure.
     """
+    data = payload.encode("utf-8") if isinstance(payload, str) else payload
     response = session.post(
         factory_uri,
-        data=payload.encode("utf-8"),
+        data=data,
         headers={
             "Content-Type":      "application/rdf+xml",
             "Accept":            "application/rdf+xml",
@@ -203,6 +303,129 @@ def post_artifact(session, factory_uri: str, payload: str) -> str | None:
         print(f"  POST failed ({response.status_code}) to {factory_uri}")
         print(f"  Response: {response.text[:2000]}")
         return None
+
+
+def sanitize_raw_rdf(rdf_bytes: bytes, rdf_type_uri: str,
+                     skip_fields: set, extra_skip_tags: set,
+                     source_host: str, target_host: str,
+                     source_project_context: str, target_project_context: str) -> bytes:
+    """
+    Prepare a raw RDF/XML blob from the source for POST to the target.
+
+    Fixes identified from payload inspection:
+    1. Root tag <rdf:Description> -> typed element (e.g. <oslc_qm:TestScript>)
+    2. Remove server-managed fields via both prefixed SKIP_FIELDS and
+       Clark-notation EXTRA_SKIP_TAGS (catches namespace mismatches like
+       acp: -> http://jazz.net/ns/acp# instead of http://jazz.net/xmlns/..)
+    3. Rewrite source_host -> target_host AND source project context ID ->
+       target project context ID in all URI attributes (fixes containsTestScriptStep)
+    4. Strip namespace declarations rejected by ETM 7.x
+    """
+    PREFIX_MAP = {
+        "oslc":        "http://open-services.net/ns/core#",
+        "rdf":         "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "dcterms":     "http://purl.org/dc/terms/",
+        "rtc_cm":      "http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/",
+        "rqm_qm":      "http://jazz.net/xmlns/prod/jazz/rqm/qm/1.0/",
+        "oslc_qm":     "http://open-services.net/ns/qm#",
+        "oslc_cm":     "http://open-services.net/ns/cm#",
+        "oslc_cm1":    "http://open-services.net/ns/cm-x#",
+        "process":     "http://jazz.net/xmlns/prod/jazz/process/1.0/",
+        "acc":         "http://open-services.net/ns/core/acc#",
+        "acp":         "http://jazz.net/xmlns/prod/jazz/jfs/1.0/",
+        "calm":        "http://jazz.net/xmlns/prod/jazz/calm/1.0/",
+        "oslc_config": "http://open-services.net/ns/config#",
+    }
+    # Map rdf_type_uri -> typed Clark tag for the main element
+    TYPE_TAG = {
+        "http://open-services.net/ns/qm#TestScript":
+            "{http://open-services.net/ns/qm#}TestScript",
+        "http://open-services.net/ns/qm#TestCase":
+            "{http://open-services.net/ns/qm#}TestCase",
+        "http://open-services.net/ns/qm#TestPlan":
+            "{http://open-services.net/ns/qm#}TestPlan",
+        "http://open-services.net/ns/qm#TestExecutionRecord":
+            "{http://open-services.net/ns/qm#}TestExecutionRecord",
+        "http://open-services.net/ns/qm#TestResult":
+            "{http://open-services.net/ns/qm#}TestResult",
+    }
+    RDF_NS_URI   = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    RDF_ABOUT    = f"{{{RDF_NS_URI}}}about"
+    RDF_RES_ATTR = f"{{{RDF_NS_URI}}}resource"
+    RQM_NS       = "http://jazz.net/ns/qm/rqm#"   # actual ns used in ETM RDF
+
+    # Build tag removal set from prefixed skip_fields + extra_skip_tags
+    tags_to_remove: set = set(extra_skip_tags)
+    for field in skip_fields:
+        if ":" in field and not field.startswith("http"):
+            prefix, local = field.split(":", 1)
+            ns = PREFIX_MAP.get(prefix)
+            if ns:
+                tags_to_remove.add(f"{{{ns}}}{local}")
+            # Also add the actual ETM rqm_qm namespace variant
+            if prefix == "rqm_qm":
+                tags_to_remove.add(f"{{{RQM_NS}}}{local}")
+
+    parser = ET.XMLParser(recover=True, remove_comments=True)
+    root   = ET.fromstring(rdf_bytes, parser=parser)
+
+    # Find main resource element (first child with rdf:about, or first child)
+    main_el = None
+    for child in root:
+        if child.get(RDF_ABOUT):
+            main_el = child
+            break
+    if main_el is None and list(root):
+        main_el = list(root)[0]
+    if main_el is None:
+        return rdf_bytes
+
+    # 1. Remove server-managed top-level fields
+    for child in list(main_el):
+        if child.tag in tags_to_remove:
+            main_el.remove(child)
+
+    # 2. Replace rdf:Description tag with the typed element tag
+    typed_tag = TYPE_TAG.get(rdf_type_uri)
+    if typed_tag and main_el.tag == f"{{{RDF_NS_URI}}}Description":
+        main_el.tag = typed_tag
+
+    # 3. Remove rdf:about (creation semantics)
+    main_el.attrib.pop(RDF_ABOUT, None)
+
+    # 4. Rewrite host and project context ID throughout the document
+    def _rewrite(node):
+        for attr in (RDF_ABOUT, RDF_RES_ATTR):
+            val = node.get(attr)
+            if val:
+                if source_host in val:
+                    val = val.replace(source_host, target_host)
+                if source_project_context and source_project_context in val:
+                    val = val.replace(source_project_context, target_project_context)
+                node.set(attr, val)
+        if node.text and source_host in node.text:
+            node.text = node.text.replace(source_host, target_host)
+        for child in node:
+            _rewrite(child)
+
+    _rewrite(root)
+
+    # 5. Strip namespace declarations rejected by ETM 7.x
+    NS_TO_STRIP = {
+        "http://open-services.net/ns/config#",
+        "http://jazz.net/xmlns/prod/jazz/calm/1.0/",
+        "http://open-services.net/xmlns/qm/1.0/",
+    }
+    serialised = ET.tostring(root, encoding="unicode")
+    for ns_uri in NS_TO_STRIP:
+        serialised = re.sub(
+            r'\s+xmlns(?::\w+)?="' + re.escape(ns_uri) + r'"',
+            "",
+            serialised,
+        )
+    return serialised.encode("utf-8")
+
+
 
 
 def upload_ewm_attachment(session, jazzhost: str, wi_uri: str, filepath: str,
@@ -278,12 +501,10 @@ def upload_ewm_attachment(session, jazzhost: str, wi_uri: str, filepath: str,
             print(f"  Could not fetch work item for attachment linking ({wi_resp.status_code})")
             return new_att_uri  # attachment uploaded but not linked
 
-        import lxml.etree as _ET
-        RDF_NS  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
         ATT_TAG = "{http://jazz.net/xmlns/prod/jazz/rtc/cm/1.0/}com.ibm.team.workitem.linktype.attachment.attachment"
 
-        parser = _ET.XMLParser(recover=True)
-        root   = _ET.fromstring(wi_resp.content, parser=parser)
+        parser = ET.XMLParser(recover=True)
+        root   = ET.fromstring(wi_resp.content, parser=parser)
 
         # Find main resource element
         main_el = next(
@@ -297,10 +518,10 @@ def upload_ewm_attachment(session, jazzhost: str, wi_uri: str, filepath: str,
         # Check if link already present
         existing = {el.get(f"{{{RDF_NS}}}resource", "") for el in main_el.findall(ATT_TAG)}
         if new_att_uri not in existing:
-            el = _ET.SubElement(main_el, ATT_TAG)
+            el = ET.SubElement(main_el, ATT_TAG)
             el.set(f"{{{RDF_NS}}}resource", new_att_uri)
 
-        updated_rdf = _ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        updated_rdf = ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
         etag = wi_resp.headers.get("ETag")
         put_headers = {
@@ -387,21 +608,19 @@ def upload_etm_attachment(session, jazzhost: str, project_area_id: str,
                 verify=False,
             )
             if art_resp.status_code == 200:
-                import lxml.etree as _ET2
-                RDF_NS2  = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
                 ATT_TAG2 = "{http://jazz.net/ns/qm/rqm#}attachment"
-                parser2  = _ET2.XMLParser(recover=True)
-                root2    = _ET2.fromstring(art_resp.content, parser2)
+                parser2  = ET.XMLParser(recover=True)
+                root2    = ET.fromstring(art_resp.content, parser2)
                 main2    = next(
-                    (c for c in root2 if c.get(f"{{{RDF_NS2}}}about")),
+                    (c for c in root2 if c.get(f"{{{RDF_NS}}}about")),
                     list(root2)[0] if list(root2) else None
                 )
                 if main2 is not None:
-                    existing2 = {el.get(f"{{{RDF_NS2}}}resource", "") for el in main2.findall(ATT_TAG2)}
+                    existing2 = {el.get(f"{{{RDF_NS}}}resource", "") for el in main2.findall(ATT_TAG2)}
                     if new_att_uri not in existing2:
-                        el2 = _ET2.SubElement(main2, ATT_TAG2)
-                        el2.set(f"{{{RDF_NS2}}}resource", new_att_uri)
-                    updated2 = _ET2.tostring(root2, encoding="utf-8", xml_declaration=True)
+                        el2 = ET.SubElement(main2, ATT_TAG2)
+                        el2.set(f"{{{RDF_NS}}}resource", new_att_uri)
+                    updated2 = ET.tostring(root2, encoding="utf-8", xml_declaration=True)
                     etag2    = art_resp.headers.get("ETag")
                     put_h2   = {"Content-Type": "application/rdf+xml", "Accept": "application/rdf+xml", "OSLC-Core-Version": "2.0"}
                     if etag2:
@@ -574,6 +793,54 @@ for child in etm_svc_root:
         break
 print(f"ETM services URL: {etm_services_url}")
 
+# Extract project context IDs for URI rewriting in sanitize_raw_rdf
+# Target context comes from the services URL
+_tgt_ctx_match = re.search(r"/contexts/([^/]+)/", etm_services_url)
+TARGET_ETM_CTX = _tgt_ctx_match.group(1) if _tgt_ctx_match else ""
+
+# Source context: try raw RDF blobs first, then fall back to exported JSON data
+SOURCE_ETM_CTX = ""
+
+def _extract_ctx_from_uri(uri: str) -> str:
+    m = re.search(r"/contexts/([^/]+)/", uri)
+    return m.group(1) if m else ""
+
+# Method 1: scan a raw RDF blob
+_ts_idx_path = TS_RAW_INDEX
+if not SOURCE_ETM_CTX and os.path.exists(_ts_idx_path):
+    _ts_idx = load_json(_ts_idx_path)
+    if _ts_idx:
+        _first_raw = os.path.join(RAW_RDF_DIR, "testscripts", next(iter(_ts_idx.values())))
+        if os.path.exists(_first_raw):
+            try:
+                _raw_tree = ET.parse(_first_raw)
+                _rdf_res  = f"{{{RDF_NS}}}resource"
+                _rdf_ab   = f"{{{RDF_NS}}}about"
+                for _el in _raw_tree.iter():
+                    for _attr in (_rdf_res, _rdf_ab):
+                        _ctx = _extract_ctx_from_uri(_el.get(_attr, ""))
+                        if _ctx:
+                            SOURCE_ETM_CTX = _ctx
+                            break
+                    if SOURCE_ETM_CTX:
+                        break
+            except Exception:
+                pass
+
+# Method 2: scan URI keys in exported JSON (artifact URIs contain the context)
+if not SOURCE_ETM_CTX:
+    _etm_data = load_json(os.path.join(DATA_DIR, "etm_testscripts.json"))
+    if not _etm_data:
+        _etm_data = load_json(os.path.join(DATA_DIR, "etm_testcases.json"))
+    for _uri in _etm_data:
+        _ctx = _extract_ctx_from_uri(_uri)
+        if _ctx:
+            SOURCE_ETM_CTX = _ctx
+            break
+
+print(f"Source ETM context: {SOURCE_ETM_CTX or '(unknown - check raw_rdf/ exists)'}")
+print(f"Target ETM context: {TARGET_ETM_CTX or '(unknown)'}")
+
 # ---------------------------------------------------------------------------
 # Load mapping table (resume support)
 # ---------------------------------------------------------------------------
@@ -583,17 +850,167 @@ print(f"\nMapping table loaded: {len(mapping)} existing entries.")
 # ---------------------------------------------------------------------------
 # Load exported data
 # ---------------------------------------------------------------------------
-ewm_workitems      = load_json(os.path.join(DATA_DIR, "ewm_workitems.json"))
-etm_testscripts    = load_json(os.path.join(DATA_DIR, "etm_testscripts.json"))
-etm_testcases      = load_json(os.path.join(DATA_DIR, "etm_testcases.json"))
-etm_testplans      = load_json(os.path.join(DATA_DIR, "etm_testplans.json"))
-etm_execrecords    = load_json(os.path.join(DATA_DIR, "etm_executionrecords.json"))
-etm_testresults    = load_json(os.path.join(DATA_DIR, "etm_testresults.json"))
-ewm_att_index      = load_json(EWM_ATT_INDEX)
-etm_att_index      = load_json(ETM_ATT_INDEX)
+ewm_workitems   = load_json(os.path.join(DATA_DIR, "ewm_workitems.json"))
+etm_testscripts = load_json(os.path.join(DATA_DIR, "etm_testscripts.json"))
+etm_testcases   = load_json(os.path.join(DATA_DIR, "etm_testcases.json"))
+etm_testplans   = load_json(os.path.join(DATA_DIR, "etm_testplans.json"))
+etm_execrecords = load_json(os.path.join(DATA_DIR, "etm_executionrecords.json"))
+etm_testresults = load_json(os.path.join(DATA_DIR, "etm_testresults.json"))
+ewm_att_index   = load_json(EWM_ATT_INDEX)
+etm_att_index   = load_json(ETM_ATT_INDEX)
+ts_raw_index    = load_json(TS_RAW_INDEX)
+tc_raw_index    = load_json(TC_RAW_INDEX)
+
+
+def transition_etm_state(session, artifact_uri: str,
+                          target_workflow_state_uri: str) -> bool:
+    """
+    Attempt to set the workflow state of an ETM artifact after creation.
+
+    ETM ignores hasWorkflowState in the creation POST payload (the factory
+    always assigns the initial workflow state).  To migrate state, we:
+      1. GET the artifact RDF
+      2. Find the current hasWorkflowState element
+      3. Replace its rdf:resource with the target state URI
+      4. PUT the updated RDF back
+
+    Returns True if the state was updated, False otherwise.
+    The function is best-effort: failures are logged but do not abort the run.
+    """
+    HWS_TAG  = "{http://jazz.net/xmlns/prod/jazz/rqm/process/1.0/}hasWorkflowState"
+    RDF_RES  = f"{{{RDF_NS}}}resource"
+    RDF_AB   = f"{{{RDF_NS}}}about"
+
+    try:
+        resp = session.get(
+            artifact_uri,
+            headers={"Accept": "application/rdf+xml", "OSLC-Core-Version": "2.0"},
+            verify=False,
+        )
+        if resp.status_code != 200:
+            print(f"    [state] GET failed ({resp.status_code}): {artifact_uri}")
+            return False
+
+        parser  = ET.XMLParser(recover=True)
+        root    = ET.fromstring(resp.content, parser=parser)
+        main_el = next(
+            (c for c in root if c.get(RDF_AB)),
+            list(root)[0] if list(root) else None,
+        )
+        if main_el is None:
+            return False
+
+        hws_el = main_el.find(HWS_TAG)
+        if hws_el is None:
+            # Add the element if missing
+            hws_el = ET.SubElement(main_el, HWS_TAG)
+
+        current = hws_el.get(RDF_RES, "")
+        if current == target_workflow_state_uri:
+            return True  # already correct
+
+        hws_el.set(RDF_RES, target_workflow_state_uri)
+        updated = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+        etag = resp.headers.get("ETag")
+        put_h = {
+            "Content-Type":      "application/rdf+xml",
+            "Accept":            "application/rdf+xml",
+            "OSLC-Core-Version": "2.0",
+        }
+        if etag:
+            put_h["If-Match"] = etag
+
+        put_resp = session.put(artifact_uri, data=updated, headers=put_h, verify=False)
+        if put_resp.status_code in (200, 204):
+            print(f"    [state] Set: {target_workflow_state_uri.split('/')[-1]}")
+            return True
+        else:
+            print(f"    [state] PUT failed ({put_resp.status_code}): {put_resp.text[:300]}")
+            return False
+
+    except Exception as e:
+        print(f"    [state] Error: {e}")
+        return False
+
+
+def create_etm_artifact_raw(src_uri: str, props: dict, rdf_type_uri: str,
+                             factory_uri: str, raw_index: dict,
+                             raw_subdir: str) -> str | None:
+    """
+    POST an ETM artifact.  Prefers the raw RDF blob (preserves step elements).
+    Falls back to a constructed minimal payload.
+    After creation, applies state via a follow-up PUT (ETM factory always
+    resets to initial state on creation regardless of payload content).
+    Writes the sanitized payload to debug_last_<subdir>_payload.rdf.
+    """
+    title        = props.get("dcterms:title", src_uri)
+    raw_filename = raw_index.get(src_uri)
+    raw_path     = os.path.join(RAW_RDF_DIR, raw_subdir, raw_filename) if raw_filename else None
+
+    # Extract source hasWorkflowState URI before sanitizing so we can reapply it
+    source_state_uri = None
+    HWS_TAG      = "{http://jazz.net/xmlns/prod/jazz/rqm/process/1.0/}hasWorkflowState"
+    RDF_RES_ATTR = f"{{{RDF_NS}}}resource"
+
+    if raw_path and os.path.exists(raw_path):
+        with open(raw_path, "rb") as _f:
+            raw_bytes = _f.read()
+
+        try:
+            _parser = ET.XMLParser(recover=True)
+            _root   = ET.fromstring(raw_bytes, _parser)
+            _main   = next((c for c in _root if c.get(f"{{{RDF_NS}}}about")),
+                           list(_root)[0] if list(_root) else None)
+            if _main is not None:
+                _hws = _main.find(HWS_TAG)
+                if _hws is not None:
+                    source_state_uri = _hws.get(RDF_RES_ATTR, "")
+        except Exception:
+            pass
+
+        payload = sanitize_raw_rdf(
+            raw_bytes, rdf_type_uri,
+            SKIP_FIELDS, EXTRA_SKIP_TAGS,
+            SOURCE_HOST, jazzhost,
+            SOURCE_ETM_CTX, TARGET_ETM_CTX,
+        )
+        method = "raw"
+    else:
+        if raw_filename:
+            print(f"  WARN: raw file missing ({raw_path}) -- constructed payload")
+        else:
+            print(f"  WARN: no raw index entry for {title} -- constructed payload")
+        payload = build_rdf_payload(
+            rdf_type_uri, props, SKIP_FIELDS, LINK_FIELDS, mapping
+        ).encode("utf-8")
+        method = "constructed"
+
+    debug_path = os.path.join(DATA_DIR, f"debug_last_{raw_subdir}_payload.rdf")
+    with open(debug_path, "wb") as _f:
+        _f.write(payload)
+
+    new_uri = post_artifact(etm_session, factory_uri, payload)
+    if new_uri:
+        print(f"  CREATED [{method}]: {title}")
+        print(f"    {src_uri} -> {new_uri}")
+
+        # Follow-up PUT to set workflow state: ETM factory always assigns the
+        # initial state regardless of what hasWorkflowState was in the payload.
+        if source_state_uri and SOURCE_ETM_CTX and TARGET_ETM_CTX:
+            target_state_uri = (
+                source_state_uri
+                .replace(SOURCE_HOST, jazzhost)
+                .replace(SOURCE_ETM_CTX, TARGET_ETM_CTX)
+            )
+            transition_etm_state(etm_session, new_uri, target_state_uri)
+    else:
+        print(f"  FAILED [{method}]: {title} -- payload: {debug_path}")
+    return new_uri
+
 
 # ===========================================================================
-# STEP 1 -- Create ETM TestScripts
+# STEP 1 -- Create ETM TestScripts  (raw RDF path preserves step elements)
 # ===========================================================================
 print("\n=== Creating ETM TestScripts ===")
 
@@ -605,23 +1022,17 @@ else:
         if src_uri in mapping:
             print(f"  SKIP (already mapped): {props.get('dcterms:title', src_uri)}")
             continue
-
-        payload = build_rdf_payload(
+        new_uri = create_etm_artifact_raw(
+            src_uri, props,
             "http://open-services.net/ns/qm#TestScript",
-            props, SKIP_FIELDS, LINK_FIELDS, mapping
+            factory_uri, ts_raw_index, "testscripts",
         )
-        new_uri = post_artifact(etm_session, factory_uri, payload)
         if new_uri:
             mapping[src_uri] = new_uri
             save_json(MAPPING_FILE, mapping)
-            print(f"  CREATED: {props.get('dcterms:title', src_uri)}")
-            print(f"    {src_uri}")
-            print(f"    -> {new_uri}")
-        else:
-            print(f"  FAILED: {props.get('dcterms:title', src_uri)}")
 
 # ===========================================================================
-# STEP 2 -- Create ETM TestCases
+# STEP 2 -- Create ETM TestCases  (raw RDF path)
 # ===========================================================================
 print("\n=== Creating ETM TestCases ===")
 
@@ -633,19 +1044,14 @@ else:
         if src_uri in mapping:
             print(f"  SKIP (already mapped): {props.get('dcterms:title', src_uri)}")
             continue
-
-        payload = build_rdf_payload(
+        new_uri = create_etm_artifact_raw(
+            src_uri, props,
             "http://open-services.net/ns/qm#TestCase",
-            props, SKIP_FIELDS, LINK_FIELDS, mapping
+            factory_uri, tc_raw_index, "testcases",
         )
-        new_uri = post_artifact(etm_session, factory_uri, payload)
         if new_uri:
             mapping[src_uri] = new_uri
             save_json(MAPPING_FILE, mapping)
-            print(f"  CREATED: {props.get('dcterms:title', src_uri)}")
-            print(f"    -> {new_uri}")
-        else:
-            print(f"  FAILED: {props.get('dcterms:title', src_uri)}")
 
 # ===========================================================================
 # STEP 3 -- Create ETM TestPlans
@@ -690,6 +1096,12 @@ else:
             print(f"  SKIP (already mapped): {props.get('dcterms:title', src_uri)}")
             continue
 
+        missing = [lf for lf in MANDATORY_LINKS
+                   if props.get(lf) and not mapping.get(str(props[lf]))]
+        if missing:
+            print(f"  SKIP (missing mandatory links {missing}): {props.get('dcterms:title', src_uri)}")
+            continue
+
         payload = build_rdf_payload(
             "http://open-services.net/ns/qm#TestExecutionRecord",
             props, SKIP_FIELDS, LINK_FIELDS, mapping, MANDATORY_LINKS
@@ -719,6 +1131,12 @@ else:
             print(f"  SKIP (already mapped): {props.get('dcterms:title', src_uri)}")
             continue
 
+        missing = [lf for lf in MANDATORY_LINKS
+                   if props.get(lf) and not mapping.get(str(props[lf]))]
+        if missing:
+            print(f"  SKIP (missing mandatory links {missing}): {props.get('dcterms:title', src_uri)}")
+            continue
+
         payload = build_rdf_payload(
             "http://open-services.net/ns/qm#TestResult",
             props, SKIP_FIELDS, LINK_FIELDS, mapping, MANDATORY_LINKS
@@ -731,6 +1149,32 @@ else:
             print(f"    -> {new_uri}")
         else:
             print(f"  FAILED: {props.get('dcterms:title', src_uri)}")
+
+def transition_ewm_state(session, wi_uri: str, source_state_uri: str,
+                          source_host: str, target_host: str) -> bool:
+    """
+    EWM state migration placeholder.
+
+    EWM state transitions via OSLC are not supported in 7.x -- the server
+    accepts PUT requests but silently ignores state field changes.
+
+    To migrate states correctly, ensure source and target EWM projects use
+    identical workflow configuration (same process template with same
+    workflow customizations), then populate EWM_STATE_MAP with the correct
+    mappings discovered via discover_ewm_states.py.
+
+    For now this function is a no-op that logs the source state for reference.
+    """
+    src_literal = source_state_uri.rstrip("/").split("/")[-1]
+    mapped = EWM_STATE_MAP.get(src_literal, None)
+    if mapped == "":
+        return True  # initial state, already correct
+    if src_literal:
+        print(f"    [state] Skipped (source: '{src_literal}') -- "
+              f"align workflow config between instances to enable state migration")
+    return False
+
+
 
 # ===========================================================================
 # STEP 6 -- Create EWM WorkItems (without ETM links -- added by migration_links.py)
@@ -748,7 +1192,6 @@ for src_uri, props in ewm_workitems.items():
 
     factory_uri = get_ewm_factory_uri_by_type(ewm_services_xml, wi_type)
     if not factory_uri:
-        # Fallback to generic ChangeRequest factory
         factory_uri = get_ewm_factory_uri_by_type(ewm_services_xml, "workitems")
     if not factory_uri:
         print(f"  FAILED (no factory for type '{wi_type}'): {src_uri}")
@@ -764,6 +1207,12 @@ for src_uri, props in ewm_workitems.items():
         save_json(MAPPING_FILE, mapping)
         print(f"  CREATED [{wi_type}]: {props.get('dcterms:title', src_uri)}")
         print(f"    -> {new_uri}")
+
+        # Apply source workflow state via follow-up PUT
+        src_state = props.get("rtc_cm:state", "")
+        if src_state:
+            transition_ewm_state(ewm_session, new_uri, src_state,
+                                  SOURCE_HOST, jazzhost)
     else:
         print(f"  FAILED: {props.get('dcterms:title', src_uri)}")
 
